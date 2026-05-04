@@ -32,11 +32,33 @@ struct DriverTelemetryResponse {
     points: Vec<TelemetryPoint>,
 }
 
+#[derive(Serialize)]
+struct Driver {
+    code: String,
+    name: String,
+    team: String,
+}
+
 async fn health_check() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
         service: "sectorflow-backend".to_string(),
     })
+}
+
+async fn get_drivers() -> Json<Vec<Driver>> {
+    Json(vec![
+        Driver {
+            code: "VER".to_string(),
+            name: "Max Verstappen".to_string(),
+            team: "Red Bull Racing".to_string(),
+        },
+        Driver {
+            code: "NOR".to_string(),
+            name: "Lando Norris".to_string(),
+            team: "McLaren".to_string(),
+        },
+    ])
 }
 
 async fn get_telemetry(Path(driver): Path<String>) -> Result<Json<DriverTelemetryResponse>, AppError> {
@@ -102,6 +124,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/health", get(health_check))
+        .route("/api/drivers", get(get_drivers))
         .route("/api/telemetry/{driver}", get(get_telemetry))
         .layer(cors);
 
