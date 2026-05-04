@@ -38,7 +38,7 @@ The project processes lap telemetry data, compares driver performance, detects b
 
 ## MVP Scope
 
-The first version of SectorFlow will allow a user to select two drivers from a fixed session and compare their lap telemetry.
+The initial MVP uses sample telemetry fixtures to validate the API design and Rust parsing pipeline. Real Formula 1 telemetry data will be exported using FastF1 and processed through the same CSV-based backend pipeline.
 
 Core MVP features:
 
