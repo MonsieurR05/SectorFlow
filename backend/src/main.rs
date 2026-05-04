@@ -1,10 +1,12 @@
 use axum::{
+    extract::Path,
+    http::StatusCode,
+    response::{IntoResponse, Response},
     routing::get,
-    Json,
-    Router,
+    Json, Router,
 };
-use serde::Serialize;
-use std::net::SocketAddr;
+use serde::{Deserialize, Serialize};
+use std::{fs::File, net::SocketAddr};
 use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Serialize)]
@@ -13,11 +15,82 @@ struct HealthResponse {
     service: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct TelemetryPoint {
+    time: f64,
+    distance: f64,
+    speed: f64,
+    throttle: f64,
+    brake: bool,
+    gear: i32,
+    rpm: i32,
+}
+
+#[derive(Serialize)]
+struct DriverTelemetryResponse {
+    driver: String,
+    points: Vec<TelemetryPoint>,
+}
+
 async fn health_check() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
         service: "sectorflow-backend".to_string(),
     })
+}
+
+async fn get_telemetry(Path(driver): Path<String>) -> Result<Json<DriverTelemetryResponse>, AppError> {
+    let driver_code = driver.to_uppercase();
+
+    let file_path = match driver_code.as_str() {
+        "VER" => "data/sample_ver.csv",
+        "NOR" => "data/sample_nor.csv",
+        _ => return Err(AppError::NotFound(format!("Driver '{}' not found", driver_code))),
+    };
+
+    let points = load_telemetry_from_csv(file_path)?;
+
+    Ok(Json(DriverTelemetryResponse {
+        driver: driver_code,
+        points,
+    }))
+}
+
+fn load_telemetry_from_csv(file_path: &str) -> Result<Vec<TelemetryPoint>, AppError> {
+    let file = File::open(file_path)
+        .map_err(|_| AppError::Internal(format!("Could not open file: {}", file_path)))?;
+
+    let mut reader = csv::Reader::from_reader(file);
+    let mut points = Vec::new();
+
+    for result in reader.deserialize() {
+        let point: TelemetryPoint = result
+            .map_err(|_| AppError::Internal("Failed to parse telemetry row".to_string()))?;
+
+        points.push(point);
+    }
+
+    Ok(points)
+}
+
+enum AppError {
+    NotFound(String),
+    Internal(String),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            AppError::NotFound(message) => (StatusCode::NOT_FOUND, message),
+            AppError::Internal(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
+        };
+
+        let body = Json(serde_json::json!({
+            "error": message
+        }));
+
+        (status, body).into_response()
+    }
 }
 
 #[tokio::main]
@@ -29,6 +102,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/health", get(health_check))
+        .route("/api/telemetry/{driver}", get(get_telemetry))
         .layer(cors);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
