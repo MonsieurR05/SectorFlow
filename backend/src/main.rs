@@ -1,5 +1,5 @@
 use axum::{
-    extract::Path,
+    extract::{Path, Query},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
@@ -39,6 +39,23 @@ struct Driver {
     team: String,
 }
 
+#[derive(Serialize)]
+struct ComparisonResponse {
+    driver_a: String,
+    driver_b: String,
+    points_compared: usize,
+    driver_a_max_speed: f64,
+    driver_b_max_speed: f64,
+    max_speed_delta: f64,
+    average_speed_delta: f64,
+}
+
+#[derive(Deserialize)]
+struct CompareQuery {
+    driver_a: String,
+    driver_b: String,
+}
+
 async fn health_check() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
@@ -64,11 +81,7 @@ async fn get_drivers() -> Json<Vec<Driver>> {
 async fn get_telemetry(Path(driver): Path<String>) -> Result<Json<DriverTelemetryResponse>, AppError> {
     let driver_code = driver.to_uppercase();
 
-    let file_path = match driver_code.as_str() {
-        "VER" => "data/sample_ver.csv",
-        "NOR" => "data/sample_nor.csv",
-        _ => return Err(AppError::NotFound(format!("Driver '{}' not found", driver_code))),
-    };
+    let file_path = get_driver_file_path(&driver_code)?; 
 
     let points = load_telemetry_from_csv(file_path)?;
 
@@ -76,6 +89,72 @@ async fn get_telemetry(Path(driver): Path<String>) -> Result<Json<DriverTelemetr
         driver: driver_code,
         points,
     }))
+}
+
+async fn compare_drivers(
+    Query(query): Query<CompareQuery>,
+) -> Result<Json<ComparisonResponse>, AppError> {
+    let driver_a = query.driver_a.to_uppercase();
+    let driver_b = query.driver_b.to_uppercase();
+
+    let file_a = get_driver_file_path(&driver_a)?;
+    let file_b = get_driver_file_path(&driver_b)?;
+
+    let telemetry_a = load_telemetry_from_csv(file_a)?;
+    let telemetry_b = load_telemetry_from_csv(file_b)?;
+
+    let points_compared = telemetry_a.len().min(telemetry_b.len());
+
+    if points_compared == 0 {
+        return Err(AppError::Internal(
+            "Cannot compare empty telemetry data".to_string(),
+        ));
+    }
+
+    let driver_a_max_speed = max_speed(&telemetry_a);
+    let driver_b_max_speed = max_speed(&telemetry_b);
+
+    let mut total_delta = 0.0;
+    let mut max_speed_delta = 0.0;
+
+    for index in 0..points_compared {
+        let delta = telemetry_a[index].speed - telemetry_b[index].speed;
+        total_delta += delta.abs();
+
+        if delta.abs() > max_speed_delta {
+            max_speed_delta = delta.abs();
+        }
+    }
+
+    let average_speed_delta = total_delta / points_compared as f64;
+
+    Ok(Json(ComparisonResponse {
+        driver_a,
+        driver_b,
+        points_compared,
+        driver_a_max_speed,
+        driver_b_max_speed,
+        max_speed_delta,
+        average_speed_delta,
+    }))
+}
+
+fn get_driver_file_path(driver_code: &str) -> Result<&'static str, AppError> {
+    match driver_code {
+        "VER" => Ok("data/sample_ver.csv"),
+        "NOR" => Ok("data/sample_nor.csv"),
+        _ => Err(AppError::NotFound(format!(
+            "Driver '{}' not found",
+            driver_code
+        ))),
+    }
+}
+
+fn max_speed(points: &[TelemetryPoint]) -> f64 {
+    points
+        .iter()
+        .map(|point| point.speed)
+        .fold(0.0, f64::max)
 }
 
 fn load_telemetry_from_csv(file_path: &str) -> Result<Vec<TelemetryPoint>, AppError> {
@@ -126,6 +205,7 @@ async fn main() {
         .route("/api/health", get(health_check))
         .route("/api/drivers", get(get_drivers))
         .route("/api/telemetry/{driver}", get(get_telemetry))
+        .route("/api/compare", get(compare_drivers))
         .layer(cors);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
