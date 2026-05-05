@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+#[derive(Debug)]
 pub enum AppError {
     NotFound(String),
     Internal(String),
