@@ -56,6 +56,22 @@ struct CompareQuery {
     driver_b: String,
 }
 
+#[derive(Serialize)]
+struct BrakingZone {
+    start_distance: f64,
+    end_distance: f64,
+    entry_speed: f64,
+    minimum_speed: f64,
+    speed_drop: f64,
+}
+
+#[derive(Serialize)]
+struct BrakingZonesResponse {
+    driver: String,
+    zones_detected: usize,
+    braking_zones: Vec<BrakingZone>,
+}
+
 async fn health_check() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
@@ -139,6 +155,22 @@ async fn compare_drivers(
     }))
 }
 
+async fn get_braking_zones(
+    Path(driver): Path<String>,
+) -> Result<Json<BrakingZonesResponse>, AppError> {
+    let driver_code = driver.to_uppercase();
+    let file_path = get_driver_file_path(&driver_code)?;
+
+    let telemetry = load_telemetry_from_csv(file_path)?;
+    let braking_zones = detect_braking_zones(&telemetry);
+
+    Ok(Json(BrakingZonesResponse {
+        driver: driver_code,
+        zones_detected: braking_zones.len(),
+        braking_zones,
+    }))
+}
+
 fn get_driver_file_path(driver_code: &str) -> Result<&'static str, AppError> {
     match driver_code {
         "VER" => Ok("data/sample_ver.csv"),
@@ -148,6 +180,62 @@ fn get_driver_file_path(driver_code: &str) -> Result<&'static str, AppError> {
             driver_code
         ))),
     }
+}
+
+fn detect_braking_zones(points: &[TelemetryPoint]) -> Vec<BrakingZone> {
+    let mut zones = Vec::new();
+    let mut in_zone = false;
+
+    let mut start_distance = 0.0;
+    let mut end_distance = 0.0;
+    let mut entry_speed = 0.0;
+    let mut minimum_speed = 0.0;
+
+    for point in points {
+        if point.brake && !in_zone {
+            in_zone = true;
+            start_distance = point.distance;
+            end_distance = point.distance;
+            entry_speed = point.speed;
+            minimum_speed = point.speed;
+        } else if point.brake && in_zone {
+            end_distance = point.distance;
+
+            if point.speed < minimum_speed {
+                minimum_speed = point.speed;
+            }
+        } else if !point.brake && in_zone {
+            in_zone = false;
+
+            let speed_drop = entry_speed - minimum_speed;
+
+            if speed_drop > 20.0 {
+                zones.push(BrakingZone {
+                    start_distance,
+                    end_distance,
+                    entry_speed,
+                    minimum_speed,
+                    speed_drop,
+                });
+            }
+        }
+    }
+
+    if in_zone {
+        let speed_drop = entry_speed - minimum_speed;
+
+        if speed_drop > 20.0 {
+            zones.push(BrakingZone {
+                start_distance,
+                end_distance,
+                entry_speed,
+                minimum_speed,
+                speed_drop,
+            });
+        }
+    }
+
+    zones
 }
 
 fn max_speed(points: &[TelemetryPoint]) -> f64 {
@@ -206,6 +294,7 @@ async fn main() {
         .route("/api/drivers", get(get_drivers))
         .route("/api/telemetry/{driver}", get(get_telemetry))
         .route("/api/compare", get(compare_drivers))
+        .route("/api/braking-zones/{driver}", get(get_braking_zones))
         .layer(cors);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
