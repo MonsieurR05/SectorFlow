@@ -51,4 +51,12 @@ Core MVP features:
 
 ## Project Status
 
-Planning and initial setup.
+Backend MVP implemented:
+- Axum API server
+- Driver list endpoint
+- Telemetry CSV loading
+- Driver comparison endpoint
+- Braking zone detection
+- API specification started
+
+Frontend dashboard planned / in progress.
